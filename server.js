@@ -222,6 +222,22 @@ app.get('/stats', (req, res) => {
 // ── KEEP ALIVE (prevents Render from sleeping) ────────────
 app.get('/ping', (req, res) => res.json({ status: 'alive', time: new Date().toISOString() }));
 
+// ── KEEP ALIVE (pings itself every 10 min so Render never sleeps) ────
+const SELF_URL = process.env.RENDER_EXTERNAL_URL || `http://localhost:${process.env.PORT || 4000}`;
+setInterval(async () => {
+  try {
+    const http = require('http');
+    const https = require('https');
+    const url = new URL(SELF_URL + '/ping');
+    const client = url.protocol === 'https:' ? https : http;
+    client.get(url.toString(), (res) => {
+      console.log(`[Keep-alive] ping sent → status ${res.statusCode}`);
+    }).on('error', () => {
+      console.log('[Keep-alive] ping failed — will retry in 10 min');
+    });
+  } catch(e) {}
+}, 10 * 60 * 1000); // every 10 minutes
+
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`\n✅  In Minutes backend running!`);
