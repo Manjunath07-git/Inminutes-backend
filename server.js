@@ -3,6 +3,7 @@ const cors = require('cors');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const { MongoClient, ObjectId } = require('mongodb');
 
 const app = express();
 app.use(cors({ origin: '*', methods: ['GET','POST','PUT','DELETE'], allowedHeaders: ['Content-Type'] }));
@@ -10,180 +11,223 @@ app.use(express.json());
 app.use('/images', express.static('uploads'));
 if (!fs.existsSync('uploads')) fs.mkdirSync('uploads');
 
-// ── PERSISTENT FILE STORAGE ──────────────────────────────
-const DB_FILE = 'db.json';
+// ── MONGODB CONNECTION ─────────────────────────────────────
+const MONGO_URL = process.env.MONGO_URL || 'mongodb+srv://inminutes:inminutes123@cluster0.iaf2563.mongodb.net/inminutes?appName=Cluster0';
+let db;
 
-const defaultDB = {
-  products: [],
-  orders: [],
-  users: [],
-  admins: [
-    { id: 'head_001', name: 'Head Admin', email: 'head@inminutes.in', password: 'head123', role: 'head', createdAt: new Date().toISOString() }
-  ],
-  orderCounter: 1001
-};
-
-function loadDB() {
+async function connectDB() {
   try {
-    if (fs.existsSync(DB_FILE)) {
-      const data = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
-      // Make sure all keys exist
-      return { ...defaultDB, ...data };
+    const client = new MongoClient(MONGO_URL);
+    await client.connect();
+    db = client.db('inminutes');
+    console.log('✅ MongoDB connected!');
+
+    // Create head admin if not exists
+    const admins = db.collection('admins');
+    const head = await admins.findOne({ email: 'head@inminutes.in' });
+    if (!head) {
+      await admins.insertOne({
+        id: 'head_001',
+        name: 'Head Admin',
+        email: 'head@inminutes.in',
+        password: 'head123',
+        role: 'head',
+        createdAt: new Date().toISOString()
+      });
+      console.log('✅ Head admin created');
     }
-  } catch(e) { console.log('DB load error, using defaults:', e.message); }
-  return { ...defaultDB };
+
+    // Init order counter if not exists
+    const counters = db.collection('counters');
+    const counter = await counters.findOne({ _id: 'orderCounter' });
+    if (!counter) {
+      await counters.insertOne({ _id: 'orderCounter', value: 1001 });
+    }
+  } catch(e) {
+    console.error('❌ MongoDB connection failed:', e.message);
+    process.exit(1);
+  }
 }
 
-function saveDB() {
-  try {
-    fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
-  } catch(e) { console.log('DB save error:', e.message); }
-}
-
-let db = loadDB();
-
-// Shortcuts
-const getProducts = () => db.products;
-const getOrders = () => db.orders;
-const getUsers = () => db.users;
-const getAdmins = () => db.admins;
-
+// ── MULTER ─────────────────────────────────────────────────
 const multerStorage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, 'uploads/'),
   filename: (req, file, cb) => cb(null, Date.now() + '_' + Math.random().toString(36).slice(2) + path.extname(file.originalname))
 });
 const upload = multer({ storage: multerStorage });
 
-// ── PRODUCTS ─────────────────────────────────────────────
-app.get('/products', (req, res) => res.json(db.products));
+// ── PRODUCTS ───────────────────────────────────────────────
+app.get('/products', async (req, res) => {
+  const products = await db.collection('products').find().toArray();
+  res.json(products);
+});
 
-app.post('/products', upload.array('images', 5), (req, res) => {
+app.post('/products', upload.array('images', 5), async (req, res) => {
   const data = JSON.parse(req.body.data);
   const images = (req.files || []).map(f => `${req.protocol}://${req.get('host')}/images/${f.filename}`);
   const p = { id: Date.now(), ...data, price: Number(data.price), qty: Number(data.qty), images };
-  db.products.push(p);
-  saveDB();
+  await db.collection('products').insertOne(p);
   res.json(p);
 });
 
-app.put('/products/:id', upload.array('images', 5), (req, res) => {
+app.put('/products/:id', upload.array('images', 5), async (req, res) => {
   const data = JSON.parse(req.body.data);
   const newImgs = (req.files || []).map(f => `${req.protocol}://${req.get('host')}/images/${f.filename}`);
-  db.products = db.products.map(p => p.id === Number(req.params.id)
-    ? { ...p, ...data, price: Number(data.price), qty: Number(data.qty), images: [...(data.keepImages || []), ...newImgs] }
-    : p);
-  saveDB();
+  await db.collection('products').updateOne(
+    { id: Number(req.params.id) },
+    { $set: { ...data, price: Number(data.price), qty: Number(data.qty), images: [...(data.keepImages || []), ...newImgs] } }
+  );
   res.json({ success: true });
 });
 
-app.delete('/products/:id', (req, res) => {
-  db.products = db.products.filter(p => p.id !== Number(req.params.id));
-  saveDB();
+app.delete('/products/:id', async (req, res) => {
+  await db.collection('products').deleteOne({ id: Number(req.params.id) });
   res.json({ success: true });
 });
 
-// ── ADMINS ────────────────────────────────────────────────
-app.get('/admins', (req, res) => res.json(db.admins.map(({ password: _, ...a }) => a)));
+// ── ADMINS ─────────────────────────────────────────────────
+app.get('/admins', async (req, res) => {
+  const admins = await db.collection('admins').find().toArray();
+  res.json(admins.map(({ password, _id, ...a }) => a));
+});
 
-app.post('/admins', (req, res) => {
+app.post('/admins', async (req, res) => {
   const { name, email, password, role } = req.body;
-  if (db.admins.find(a => a.email === email)) return res.status(400).json({ error: 'Email already exists' });
+  const existing = await db.collection('admins').findOne({ email });
+  if (existing) return res.status(400).json({ error: 'Email already exists' });
   const admin = { id: 'adm_' + Date.now(), name, email, password, role: role || 'admin', createdAt: new Date().toISOString() };
-  db.admins.push(admin);
-  saveDB();
-  const { password: _, ...safe } = admin;
+  await db.collection('admins').insertOne(admin);
+  const { password: _, _id, ...safe } = admin;
   res.json(safe);
 });
 
-app.delete('/admins/:id', (req, res) => {
+app.delete('/admins/:id', async (req, res) => {
   if (req.params.id === 'head_001') return res.status(403).json({ error: 'Cannot delete head admin' });
-  db.admins = db.admins.filter(a => a.id !== req.params.id);
-  saveDB();
+  await db.collection('admins').deleteOne({ id: req.params.id });
   res.json({ success: true });
 });
 
-app.put('/admins/:id', (req, res) => {
+app.put('/admins/:id', async (req, res) => {
   const { name, email, password } = req.body;
-  db.admins = db.admins.map(a => a.id === req.params.id
-    ? { ...a, name: name || a.name, email: email || a.email, password: password || a.password }
-    : a);
-  saveDB();
+  const update = {};
+  if (name) update.name = name;
+  if (email) update.email = email;
+  if (password) update.password = password;
+  await db.collection('admins').updateOne({ id: req.params.id }, { $set: update });
   res.json({ success: true });
 });
 
-app.post('/admins/login', (req, res) => {
+app.post('/admins/login', async (req, res) => {
   const { email, password } = req.body;
-  const admin = db.admins.find(a => a.email === email && a.password === password);
+  const admin = await db.collection('admins').findOne({ email, password });
   if (!admin) return res.status(401).json({ error: 'Invalid credentials' });
-  const { password: _, ...safe } = admin;
+  const { password: _, _id, ...safe } = admin;
   res.json(safe);
 });
 
-// ── USERS ─────────────────────────────────────────────────
-app.get('/users', (req, res) => res.json(db.users.map(({ password: _, ...u }) => u)));
+// ── USERS ──────────────────────────────────────────────────
+app.get('/users', async (req, res) => {
+  const users = await db.collection('users').find().toArray();
+  res.json(users.map(({ password, _id, ...u }) => u));
+});
 
-app.post('/users/register', (req, res) => {
+app.post('/users/register', async (req, res) => {
   const { name, phone, email, password } = req.body;
-  if (db.users.find(u => u.email === email)) return res.status(400).json({ error: 'Email already registered' });
+  const existing = await db.collection('users').findOne({ email });
+  if (existing) return res.status(400).json({ error: 'Email already registered' });
   const user = { id: Date.now(), name, phone, email, password, addresses: [], createdAt: new Date().toISOString() };
-  db.users.push(user);
-  saveDB();
-  const { password: _, ...safe } = user;
+  await db.collection('users').insertOne(user);
+  const { password: _, _id, ...safe } = user;
   res.json(safe);
 });
 
-app.post('/users/login', (req, res) => {
+app.post('/users/login', async (req, res) => {
   const { email, password } = req.body;
-  const user = db.users.find(u => u.email === email && u.password === password);
+  const user = await db.collection('users').findOne({ email, password });
   if (!user) return res.status(401).json({ error: 'Invalid email or password' });
-  const { password: _, ...safe } = user;
+  const { password: _, _id, ...safe } = user;
   res.json(safe);
 });
 
-app.get('/users/:id', (req, res) => {
-  const user = db.users.find(u => u.id === Number(req.params.id));
+app.get('/users/:id', async (req, res) => {
+  const user = await db.collection('users').findOne({ id: Number(req.params.id) });
   if (!user) return res.status(404).json({ error: 'Not found' });
-  const { password: _, ...safe } = user;
+  const { password, _id, ...safe } = user;
   res.json(safe);
 });
 
-app.post('/users/:id/address', (req, res) => {
+app.post('/users/:id/address', async (req, res) => {
   const addr = { id: Date.now(), ...req.body };
-  db.users = db.users.map(u => u.id === Number(req.params.id) ? { ...u, addresses: [...u.addresses, addr] } : u);
-  saveDB();
-  const user = db.users.find(u => u.id === Number(req.params.id));
-  const { password: _, ...safe } = user;
+  await db.collection('users').updateOne(
+    { id: Number(req.params.id) },
+    { $push: { addresses: addr } }
+  );
+  const user = await db.collection('users').findOne({ id: Number(req.params.id) });
+  const { password, _id, ...safe } = user;
   res.json(safe);
 });
 
-app.delete('/users/:id/address/:addrId', (req, res) => {
-  db.users = db.users.map(u => u.id === Number(req.params.id)
-    ? { ...u, addresses: u.addresses.filter(a => a.id !== Number(req.params.addrId)) }
-    : u);
-  saveDB();
+app.put('/users/:id/address/:addrId', async (req, res) => {
+  const user = await db.collection('users').findOne({ id: Number(req.params.id) });
+  if (!user) return res.status(404).json({ error: 'Not found' });
+  const addresses = user.addresses.map(a =>
+    a.id === Number(req.params.addrId) ? { ...a, ...req.body } : a
+  );
+  await db.collection('users').updateOne({ id: Number(req.params.id) }, { $set: { addresses } });
+  const updated = await db.collection('users').findOne({ id: Number(req.params.id) });
+  const { password, _id, ...safe } = updated;
+  res.json(safe);
+});
+
+app.delete('/users/:id/address/:addrId', async (req, res) => {
+  await db.collection('users').updateOne(
+    { id: Number(req.params.id) },
+    { $pull: { addresses: { id: Number(req.params.addrId) } } }
+  );
   res.json({ success: true });
 });
 
-// ── ORDERS ────────────────────────────────────────────────
-app.get('/orders', (req, res) => res.json(db.orders));
-app.get('/orders/user/:userId', (req, res) => res.json(db.orders.filter(o => o.userId === Number(req.params.userId))));
+// ── ORDERS ─────────────────────────────────────────────────
+app.get('/orders', async (req, res) => {
+  const orders = await db.collection('orders').find().toArray();
+  res.json(orders.map(({ _id, ...o }) => o));
+});
 
-app.post('/orders', (req, res) => {
+app.get('/orders/user/:userId', async (req, res) => {
+  const orders = await db.collection('orders').find({ userId: Number(req.params.userId) }).toArray();
+  res.json(orders.map(({ _id, ...o }) => o));
+});
+
+app.post('/orders', async (req, res) => {
   const { userId, items, paymentMethod, address } = req.body;
+  const products = await db.collection('products').find().toArray();
+
   for (const item of items) {
-    const p = db.products.find(p => p.id === item.productId);
+    const p = products.find(p => p.id === item.productId);
     if (!p) return res.status(400).json({ error: 'Product not found' });
     if (p.qty < item.quantity) return res.status(400).json({ error: `Only ${p.qty} units of "${p.name}" available` });
   }
-  items.forEach(item => {
-    db.products = db.products.map(p => p.id === item.productId
-      ? { ...p, qty: p.qty - item.quantity, inStock: (p.qty - item.quantity) > 0 }
-      : p);
-  });
+
+  for (const item of items) {
+    const p = products.find(p => p.id === item.productId);
+    await db.collection('products').updateOne(
+      { id: item.productId },
+      { $set: { qty: p.qty - item.quantity, inStock: (p.qty - item.quantity) > 0 } }
+    );
+  }
+
+  const counter = await db.collection('counters').findOneAndUpdate(
+    { _id: 'orderCounter' },
+    { $inc: { value: 1 } },
+    { returnDocument: 'before' }
+  );
+  const orderNum = counter.value;
+
   const subtotal = items.reduce((s, i) => s + i.price * i.quantity, 0);
-  const user = db.users.find(u => u.id === Number(userId));
+  const user = await db.collection('users').findOne({ id: Number(userId) });
+
   const order = {
-    id: 'ORD-' + db.orderCounter++,
+    id: 'ORD-' + orderNum,
     userId: Number(userId),
     userName: user?.name || 'Unknown',
     userPhone: user?.phone || '',
@@ -196,65 +240,66 @@ app.post('/orders', (req, res) => {
     createdAt: new Date().toISOString(),
     isNew: true
   };
-  db.orders.push(order);
-  saveDB();
-  res.json(order);
+
+  await db.collection('orders').insertOne(order);
+  const { _id, ...safe } = order;
+  res.json(safe);
 });
 
-app.put('/orders/:id/status', (req, res) => {
+app.put('/orders/:id/status', async (req, res) => {
   const id = decodeURIComponent(req.params.id);
-  const found = db.orders.find(o => o.id === id);
-  if (!found) return res.status(404).json({ error: 'Order not found', id });
-  db.orders = db.orders.map(o => o.id === id ? { ...o, status: req.body.status } : o);
-  saveDB();
+  await db.collection('orders').updateOne({ id }, { $set: { status: req.body.status } });
   res.json({ success: true });
 });
 
-app.put('/orders/:id/seen', (req, res) => {
+app.put('/orders/:id/seen', async (req, res) => {
   const id = decodeURIComponent(req.params.id);
-  db.orders = db.orders.map(o => o.id === id ? { ...o, isNew: false } : o);
-  saveDB();
+  await db.collection('orders').updateOne({ id }, { $set: { isNew: false } });
   res.json({ success: true });
 });
 
-// ── STATS ─────────────────────────────────────────────────
-app.get('/stats', (req, res) => {
-  const revenue = db.orders.filter(o => o.status === 'Delivered').reduce((s, o) => s + o.total, 0);
-  res.json({ products: db.products.length, orders: db.orders.length, users: db.users.length, admins: db.admins.length - 1, revenue });
+// ── STATS ──────────────────────────────────────────────────
+app.get('/stats', async (req, res) => {
+  const orders = await db.collection('orders').find().toArray();
+  const revenue = orders.filter(o => o.status === 'Delivered').reduce((s, o) => s + o.total, 0);
+  const products = await db.collection('products').countDocuments();
+  const users = await db.collection('users').countDocuments();
+  const admins = await db.collection('admins').countDocuments();
+  res.json({ products, orders: orders.length, users, admins: admins - 1, revenue });
 });
 
-// ── KEEP ALIVE (prevents Render from sleeping) ────────────
+// ── PING ───────────────────────────────────────────────────
 app.get('/ping', (req, res) => res.json({ status: 'alive', time: new Date().toISOString() }));
 
-// ── KEEP ALIVE (pings itself every 10 min so Render never sleeps) ────
+// ── KEEP ALIVE ─────────────────────────────────────────────
 const SELF_URL = process.env.RENDER_EXTERNAL_URL || `http://localhost:${process.env.PORT || 4000}`;
-setInterval(async () => {
+setInterval(() => {
+  const http = require('http');
+  const https = require('https');
   try {
-    const http = require('http');
-    const https = require('https');
     const url = new URL(SELF_URL + '/ping');
     const client = url.protocol === 'https:' ? https : http;
-    client.get(url.toString(), (res) => {
-      console.log(`[Keep-alive] ping sent → status ${res.statusCode}`);
-    }).on('error', () => {
-      console.log('[Keep-alive] ping failed — will retry in 10 min');
-    });
+    client.get(url.toString(), (r) => {
+      console.log(`[Keep-alive] ping → ${r.statusCode}`);
+    }).on('error', () => {});
   } catch(e) {}
-}, 10 * 60 * 1000); // every 10 minutes
+}, 10 * 60 * 1000);
 
+// ── START ──────────────────────────────────────────────────
 const PORT = process.env.PORT || 4000;
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`\n✅  In Minutes backend running!`);
-  console.log(`   Local:   http://localhost:${PORT}`);
-  const { networkInterfaces } = require('os');
-  const nets = networkInterfaces();
-  for (const name of Object.keys(nets)) {
-    for (const net of nets[name]) {
-      if (net.family === 'IPv4' && !net.internal) {
-        console.log(`   Network: http://${net.address}:${PORT}`);
+connectDB().then(() => {
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`\n✅  In Minutes backend running!`);
+    console.log(`   Local:   http://localhost:${PORT}`);
+    const { networkInterfaces } = require('os');
+    const nets = networkInterfaces();
+    for (const name of Object.keys(nets)) {
+      for (const net of nets[name]) {
+        if (net.family === 'IPv4' && !net.internal) {
+          console.log(`   Network: http://${net.address}:${PORT}`);
+        }
       }
     }
-  }
-  console.log(`\n   Data saved to: ${DB_FILE}`);
-  console.log(`   Products: ${db.products.length} | Orders: ${db.orders.length} | Users: ${db.users.length}`);
+    console.log(`\n   Database: MongoDB Atlas ✅`);
+  });
 });
