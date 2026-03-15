@@ -3,24 +3,36 @@ const cors = require('cors');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const { MongoClient, ObjectId } = require('mongodb');
+const { MongoClient } = require('mongodb');
+const cloudinary = require('cloudinary').v2;
+const { CloudinaryStorage } = require('multer-storage-cloudinary');
 
 const app = express();
+
 // Strong CORS fix for mobile browsers
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
   res.header('Access-Control-Allow-Credentials', 'false');
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
+  if (req.method === 'OPTIONS') return res.status(200).end();
   next();
 });
-app.use(cors({ origin: '*', methods: ['GET','POST','PUT','DELETE','OPTIONS'], allowedHeaders: ['Content-Type', 'Authorization', 'Origin', 'Accept'] }));
+app.use(cors({ origin: '*', methods: ['GET','POST','PUT','DELETE','OPTIONS'], allowedHeaders: ['Content-Type','Authorization','Origin','Accept'] }));
 app.use(express.json());
-app.use('/images', express.static('uploads'));
-if (!fs.existsSync('uploads')) fs.mkdirSync('uploads');
+
+// ── CLOUDINARY CONFIG ──────────────────────────────────────
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME || 'dreykfxfp',
+  api_key: process.env.CLOUDINARY_API_KEY || '486984161796895',
+  api_secret: process.env.CLOUDINARY_API_SECRET || 'jO3xmCTC7wxTXFTEhihJyxpwHY4'
+});
+
+const storage = new CloudinaryStorage({
+  cloudinary,
+  params: { folder: 'inminutes', allowed_formats: ['jpg','jpeg','png','webp'] }
+});
+const upload = multer({ storage });
 
 // ── MONGODB CONNECTION ─────────────────────────────────────
 const MONGO_URL = process.env.MONGO_URL || 'mongodb+srv://inminutes:inminutes123@cluster0.iaf2563.mongodb.net/inminutes?appName=Cluster0';
@@ -32,40 +44,20 @@ async function connectDB() {
     await client.connect();
     db = client.db('inminutes');
     console.log('✅ MongoDB connected!');
-
-    // Create head admin if not exists
     const admins = db.collection('admins');
     const head = await admins.findOne({ email: 'head@inminutes.in' });
     if (!head) {
-      await admins.insertOne({
-        id: 'head_001',
-        name: 'Head Admin',
-        email: 'head@inminutes.in',
-        password: 'head123',
-        role: 'head',
-        createdAt: new Date().toISOString()
-      });
+      await admins.insertOne({ id: 'head_001', name: 'Head Admin', email: 'head@inminutes.in', password: 'head123', role: 'head', createdAt: new Date().toISOString() });
       console.log('✅ Head admin created');
     }
-
-    // Init order counter if not exists
     const counters = db.collection('counters');
     const counter = await counters.findOne({ _id: 'orderCounter' });
-    if (!counter) {
-      await counters.insertOne({ _id: 'orderCounter', value: 1001 });
-    }
+    if (!counter) await counters.insertOne({ _id: 'orderCounter', value: 1001 });
   } catch(e) {
     console.error('❌ MongoDB connection failed:', e.message);
     process.exit(1);
   }
 }
-
-// ── MULTER ─────────────────────────────────────────────────
-const multerStorage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, 'uploads/'),
-  filename: (req, file, cb) => cb(null, Date.now() + '_' + Math.random().toString(36).slice(2) + path.extname(file.originalname))
-});
-const upload = multer({ storage: multerStorage });
 
 // ── PRODUCTS ───────────────────────────────────────────────
 app.get('/products', async (req, res) => {
@@ -75,7 +67,7 @@ app.get('/products', async (req, res) => {
 
 app.post('/products', upload.array('images', 5), async (req, res) => {
   const data = JSON.parse(req.body.data);
-  const images = (req.files || []).map(f => `${req.protocol}://${req.get('host')}/images/${f.filename}`);
+  const images = (req.files || []).map(f => f.path);
   const p = { id: Date.now(), ...data, price: Number(data.price), qty: Number(data.qty), images };
   await db.collection('products').insertOne(p);
   res.json(p);
@@ -83,7 +75,7 @@ app.post('/products', upload.array('images', 5), async (req, res) => {
 
 app.put('/products/:id', upload.array('images', 5), async (req, res) => {
   const data = JSON.parse(req.body.data);
-  const newImgs = (req.files || []).map(f => `${req.protocol}://${req.get('host')}/images/${f.filename}`);
+  const newImgs = (req.files || []).map(f => f.path);
   await db.collection('products').updateOne(
     { id: Number(req.params.id) },
     { $set: { ...data, price: Number(data.price), qty: Number(data.qty), images: [...(data.keepImages || []), ...newImgs] } }
@@ -169,10 +161,7 @@ app.get('/users/:id', async (req, res) => {
 
 app.post('/users/:id/address', async (req, res) => {
   const addr = { id: Date.now(), ...req.body };
-  await db.collection('users').updateOne(
-    { id: Number(req.params.id) },
-    { $push: { addresses: addr } }
-  );
+  await db.collection('users').updateOne({ id: Number(req.params.id) }, { $push: { addresses: addr } });
   const user = await db.collection('users').findOne({ id: Number(req.params.id) });
   const { password, _id, ...safe } = user;
   res.json(safe);
@@ -181,9 +170,7 @@ app.post('/users/:id/address', async (req, res) => {
 app.put('/users/:id/address/:addrId', async (req, res) => {
   const user = await db.collection('users').findOne({ id: Number(req.params.id) });
   if (!user) return res.status(404).json({ error: 'Not found' });
-  const addresses = user.addresses.map(a =>
-    a.id === Number(req.params.addrId) ? { ...a, ...req.body } : a
-  );
+  const addresses = user.addresses.map(a => a.id === Number(req.params.addrId) ? { ...a, ...req.body } : a);
   await db.collection('users').updateOne({ id: Number(req.params.id) }, { $set: { addresses } });
   const updated = await db.collection('users').findOne({ id: Number(req.params.id) });
   const { password, _id, ...safe } = updated;
@@ -191,10 +178,7 @@ app.put('/users/:id/address/:addrId', async (req, res) => {
 });
 
 app.delete('/users/:id/address/:addrId', async (req, res) => {
-  await db.collection('users').updateOne(
-    { id: Number(req.params.id) },
-    { $pull: { addresses: { id: Number(req.params.addrId) } } }
-  );
+  await db.collection('users').updateOne({ id: Number(req.params.id) }, { $pull: { addresses: { id: Number(req.params.addrId) } } });
   res.json({ success: true });
 });
 
@@ -210,33 +194,23 @@ app.get('/orders/user/:userId', async (req, res) => {
 });
 
 app.post('/orders', async (req, res) => {
-  const { userId, items, paymentMethod, address } = req.body;
+  const { userId, items, paymentMethod, address, location } = req.body;
   const products = await db.collection('products').find().toArray();
-
   for (const item of items) {
     const p = products.find(p => p.id === item.productId);
     if (!p) return res.status(400).json({ error: 'Product not found' });
     if (p.qty < item.quantity) return res.status(400).json({ error: `Only ${p.qty} units of "${p.name}" available` });
   }
-
   for (const item of items) {
     const p = products.find(p => p.id === item.productId);
-    await db.collection('products').updateOne(
-      { id: item.productId },
-      { $set: { qty: p.qty - item.quantity, inStock: (p.qty - item.quantity) > 0 } }
-    );
+    await db.collection('products').updateOne({ id: item.productId }, { $set: { qty: p.qty - item.quantity, inStock: (p.qty - item.quantity) > 0 } });
   }
-
   const counter = await db.collection('counters').findOneAndUpdate(
-    { _id: 'orderCounter' },
-    { $inc: { value: 1 } },
-    { returnDocument: 'before' }
+    { _id: 'orderCounter' }, { $inc: { value: 1 } }, { returnDocument: 'before' }
   );
   const orderNum = counter.value;
-
   const subtotal = items.reduce((s, i) => s + i.price * i.quantity, 0);
   const user = await db.collection('users').findOne({ id: Number(userId) });
-
   const order = {
     id: 'ORD-' + orderNum,
     userId: Number(userId),
@@ -247,11 +221,11 @@ app.post('/orders', async (req, res) => {
     deliveryFee: 25,
     total: subtotal + 25,
     paymentMethod, address,
+    location: location || null,
     status: 'Confirmed',
     createdAt: new Date().toISOString(),
     isNew: true
   };
-
   await db.collection('orders').insertOne(order);
   const { _id, ...safe } = order;
   res.json(safe);
@@ -290,9 +264,7 @@ setInterval(() => {
   try {
     const url = new URL(SELF_URL + '/ping');
     const client = url.protocol === 'https:' ? https : http;
-    client.get(url.toString(), (r) => {
-      console.log(`[Keep-alive] ping → ${r.statusCode}`);
-    }).on('error', () => {});
+    client.get(url.toString(), (r) => { console.log(`[Keep-alive] ping → ${r.statusCode}`); }).on('error', () => {});
   } catch(e) {}
 }, 10 * 60 * 1000);
 
@@ -306,11 +278,10 @@ connectDB().then(() => {
     const nets = networkInterfaces();
     for (const name of Object.keys(nets)) {
       for (const net of nets[name]) {
-        if (net.family === 'IPv4' && !net.internal) {
-          console.log(`   Network: http://${net.address}:${PORT}`);
-        }
+        if (net.family === 'IPv4' && !net.internal) console.log(`   Network: http://${net.address}:${PORT}`);
       }
     }
     console.log(`\n   Database: MongoDB Atlas ✅`);
+    console.log(`   Images:   Cloudinary ✅`);
   });
 });
