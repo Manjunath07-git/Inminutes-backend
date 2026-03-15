@@ -233,7 +233,25 @@ app.post('/orders', async (req, res) => {
 
 app.put('/orders/:id/status', async (req, res) => {
   const id = decodeURIComponent(req.params.id);
-  await db.collection('orders').updateOne({ id }, { $set: { status: req.body.status } });
+  const newStatus = req.body.status;
+  const order = await db.collection('orders').findOne({ id });
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+
+  // Restore stock if cancelling
+  if (newStatus === 'Cancelled' && order.status !== 'Cancelled') {
+    for (const item of order.items) {
+      const product = await db.collection('products').findOne({ id: item.productId });
+      if (product) {
+        const newQty = (product.qty || 0) + item.quantity;
+        await db.collection('products').updateOne(
+          { id: item.productId },
+          { $set: { qty: newQty, inStock: newQty > 0 } }
+        );
+      }
+    }
+  }
+
+  await db.collection('orders').updateOne({ id }, { $set: { status: newStatus } });
   res.json({ success: true });
 });
 
