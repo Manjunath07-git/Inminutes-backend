@@ -1,0 +1,122 @@
+{
+  "products": [
+    {
+      "id": 1772638371826,
+      "name": "tomatoes",
+      "category": "Groceries",
+      "price": 20,
+      "qty": 99,
+      "inStock": true,
+      "desc": "from akassh's farm",
+      "keepImages": [],
+      "images": []
+    },
+    {
+      "id": 1772638393742,
+      "name": "potato",
+      "category": "Groceries",
+      "price": 20,
+      "qty": 29,
+      "inStock": true,
+      "desc": "akash's farm",
+      "keepImages": [],
+      "images": []
+    }
+  ],
+  "orders": [
+    {
+      "id": "#ORD-1001",
+      "userId": 1773062720567,
+      "userName": "manju",
+      "userPhone": "1234567890",
+      "userEmail": "manju@gmail.com",
+      "items": [
+        {
+          "productId": 1772638371826,
+          "name": "tomatoes",
+          "price": 20,
+          "quantity": 1,
+          "image": null
+        },
+        {
+          "productId": 1772638393742,
+          "name": "potato",
+          "price": 20,
+          "quantity": 1,
+          "image": null
+        }
+      ],
+      "subtotal": 40,
+      "deliveryFee": 25,
+      "total": 65,
+      "paymentMethod": "cod",
+      "address": {
+        "id": 1773062738666,
+        "label": "Home",
+        "line1": "store street hunsur",
+        "city": "mysuru",
+        "pincode": "571105",
+        "phone": ""
+      },
+      "status": "Out for Delivery",
+      "createdAt": "2026-03-09T13:25:39.947Z",
+      "isNew": true
+    }
+  ],
+  "users": [
+    {
+      "id": 1772633377881,
+      "name": "manu",
+      "phone": "1234567894",
+      "email": "manu@gmail.com",
+      "password": "manu@123",
+      "addresses": [],
+      "createdAt": "2026-03-04T14:09:37.881Z"
+    },
+    {
+      "id": 1773062720567,
+      "name": "manju",
+      "phone": "1234567890",
+      "email": "manju@gmail.com",
+      "password": "manju@123",
+      "addresses": [
+        {
+          "id": 1773062738666,
+          "label": "Home",
+          "line1": "store street hunsur",
+          "city": "mysuru",
+          "pincode": "571105",
+          "phone": ""
+        }
+      ],
+      "createdAt": "2026-03-09T13:25:20.567Z"
+    }
+  ],
+  "admins": [
+    {
+      "id": "head_001",
+      "name": "Head Admin",
+      "email": "head@inminutes.in",
+      "password": "head123",
+      "role": "head",
+      "createdAt": "2026-03-04T14:08:42.894Z"
+    },
+    {
+      "id": "adm_1772638274523",
+      "name": "manju",
+      "email": "manju@inminutes.in",
+      "password": "manju123",
+      "role": "admin",
+      "createdAt": "2026-03-04T15:31:14.523Z"
+    },
+    {
+      "id": "adm_1772638957289",
+      "name": "chandu",
+      "email": "chandu@inminutes.in",
+      "password": "chandu@123",
+      "role": "admin",
+      "createdAt": "2026-03-04T15:42:37.289Z"
+    }
+  ],
+  "orderCounter": 1002
+}
