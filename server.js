@@ -7,7 +7,7 @@ const { MongoClient } = require('mongodb');
 const cloudinary = require('cloudinary').v2;
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
 const bcrypt = require('bcryptjs');
-const nodemailer = require('nodemailer');
+
 
 const app = express();
 
@@ -35,16 +35,42 @@ const storage = new CloudinaryStorage({
 const upload = multer({ storage });
 
 // ── EMAIL ──────────────────────────────────────────────────
-const transporter = nodemailer.createTransport({
-  host: 'smtp-relay.brevo.com',
-  port: 465,
-  secure: true,
-  auth: {
-    user: process.env.BREVO_USER,
-    pass: process.env.BREVO_PASS
-  },
-  tls: { rejectUnauthorized: false }
-});
+// Brevo HTTP API (works on Render - no SMTP needed)
+async function sendBrevoEmail(to, subject, htmlContent) {
+  return new Promise((resolve, reject) => {
+    const data = JSON.stringify({
+      sender: { name: 'In Minutes', email: 'inminutes.delivery@gmail.com' },
+      to: [{ email: to }],
+      subject,
+      htmlContent
+    });
+    const options = {
+      hostname: 'api.brevo.com',
+      path: '/v3/smtp/email',
+      method: 'POST',
+      headers: {
+        'accept': 'application/json',
+        'api-key': process.env.BREVO_API_KEY,
+        'content-type': 'application/json',
+        'content-length': Buffer.byteLength(data)
+      }
+    };
+    const req = require('https').request(options, (res) => {
+      let body = '';
+      res.on('data', chunk => body += chunk);
+      res.on('end', () => {
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          resolve(JSON.parse(body));
+        } else {
+          reject(new Error(`Brevo API error: ${res.statusCode} - ${body}`));
+        }
+      });
+    });
+    req.on('error', reject);
+    req.write(data);
+    req.end();
+  });
+}
 
 const otpStore = {};
 
@@ -107,12 +133,9 @@ async function sendOrderNotificationToAdmins(order) {
       </div>
     `;
 
-    await transporter.sendMail({
-      from: '"In Minutes Orders" <inminutes.delivery@gmail.com>',
-      to: adminEmails.join(','),
-      subject: `New Order ${order.id} - Rs.${order.total} from ${order.userName}`,
-      html
-    });
+    for (const adminEmail of adminEmails) {
+      await sendBrevoEmail(adminEmail, `New Order ${order.id} - Rs.${order.total} from ${order.userName}`, html);
+    }
     console.log(`Order notification sent to: ${adminEmails.join(', ')}`);
   } catch(e) {
     console.error('Order notification email error:', e.message);
@@ -122,7 +145,7 @@ async function sendOrderNotificationToAdmins(order) {
 async function sendOTP(email, otp, purpose) {
   const subject = purpose === 'register' ? 'Verify your In Minutes account' : 'Reset your In Minutes password';
   const html = `<div style="font-family:sans-serif;max-width:480px;margin:auto;background:#0A0A0F;color:#F5F0E8;padding:32px;border-radius:16px"><div style="font-size:24px;font-weight:800;margin-bottom:8px">In <span style="color:#FF5C3A">Minutes</span></div><p style="color:#aaa;margin-bottom:24px">${purpose === 'register' ? 'Welcome! Verify your email to get started.' : 'Reset your account password.'}</p><div style="background:#1a1a2e;border-radius:12px;padding:24px;text-align:center;margin-bottom:24px"><div style="font-size:13px;color:#aaa;margin-bottom:8px">Your OTP code</div><div style="font-size:40px;font-weight:800;letter-spacing:8px;color:#FF5C3A">${otp}</div><div style="font-size:12px;color:#aaa;margin-top:8px">Valid for 10 minutes</div></div><p style="font-size:12px;color:#666">If you did not request this, ignore this email.</p></div>`;
-  await transporter.sendMail({ from: '"In Minutes" <inminutes.delivery@gmail.com>', to: email, subject, html });
+  await sendBrevoEmail(email, subject, html);
 }
 
 async function sendSMSOTP(phone, otp) {
@@ -261,8 +284,16 @@ app.post('/otp/send', async (req, res) => {
     await sendOTP(email, otp, purpose);
     res.json({ success: true, message: 'OTP sent to ' + email });
   } catch(e) {
-    console.error('Email error:', e.message);
-    res.status(500).json({ error: 'Failed to send OTP. Check email config.' });
+    console.error('Email error FULL:', JSON.stringify({
+      message: e.message,
+      code: e.code,
+      command: e.command,
+      response: e.response,
+      responseCode: e.responseCode,
+      brevo_user: process.env.BREVO_USER ? 'SET' : 'NOT SET',
+      brevo_pass: process.env.BREVO_PASS ? 'SET' : 'NOT SET',
+    }));
+    res.status(500).json({ error: e.message || 'Failed to send OTP' });
   }
 });
 
@@ -470,8 +501,14 @@ app.post('/orders', async (req, res) => {
     isNew: true
   };
   await db.collection('orders').insertOne(order);
+  // Update promo usage if applied
+  if (req.body.promoCode) {
+    await db.collection('promos').updateOne(
+      { code: req.body.promoCode.toUpperCase() },
+      { $inc: { usedCount: 1 } }
+    );
+  }
   const { _id, ...safe } = order;
-  // Send email notification to all admins
   sendOrderNotificationToAdmins(safe);
   res.json(safe);
 });
@@ -627,12 +664,9 @@ async function checkInventoryAlerts() {
         <p style="margin-top:16px;font-size:12px;color:#aaa">Please update inventory from your admin panel.</p>
       </div>
     </div>`;
-    await transporter.sendMail({
-      from: '"In Minutes Alerts" <inminutes.delivery@gmail.com>',
-      to: adminEmails.join(','),
-      subject: `⚠️ Low Stock Alert — ${products.length} product(s) need restocking`,
-      html
-    });
+    for (const adminEmail of adminEmails) {
+      await sendBrevoEmail(adminEmail, `Low Stock Alert - ${products.length} product(s) need restocking`, html);
+    }
     console.log(`[Inventory Alert] Sent for ${products.length} products`);
   } catch(e) {
     console.error('[Inventory Alert Error]', e.message);
@@ -640,6 +674,56 @@ async function checkInventoryAlerts() {
 }
 // Check inventory every 6 hours
 setInterval(checkInventoryAlerts, 6 * 60 * 60 * 1000);
+
+// ── PROMO CODES ───────────────────────────────────────────
+app.get('/promos', async (req, res) => {
+  const promos = await db.collection('promos').find().toArray();
+  res.json(promos.map(({ _id, ...p }) => p));
+});
+
+app.post('/promos', async (req, res) => {
+  const { code, type, value, minOrder, maxUses, expiresAt } = req.body;
+  const existing = await db.collection('promos').findOne({ code: code.toUpperCase() });
+  if (existing) return res.status(400).json({ error: 'Promo code already exists' });
+  const promo = {
+    id: Date.now(),
+    code: code.toUpperCase(),
+    type, // 'percent' or 'flat'
+    value: Number(value),
+    minOrder: Number(minOrder) || 0,
+    maxUses: Number(maxUses) || 999999,
+    usedCount: 0,
+    expiresAt: expiresAt || null,
+    active: true,
+    createdAt: new Date().toISOString()
+  };
+  await db.collection('promos').insertOne(promo);
+  res.json(promo);
+});
+
+app.delete('/promos/:id', async (req, res) => {
+  await db.collection('promos').deleteOne({ id: Number(req.params.id) });
+  res.json({ success: true });
+});
+
+app.put('/promos/:id/toggle', async (req, res) => {
+  const promo = await db.collection('promos').findOne({ id: Number(req.params.id) });
+  if (!promo) return res.status(404).json({ error: 'Not found' });
+  await db.collection('promos').updateOne({ id: Number(req.params.id) }, { $set: { active: !promo.active } });
+  res.json({ success: true });
+});
+
+app.post('/promos/validate', async (req, res) => {
+  const { code, orderTotal } = req.body;
+  const promo = await db.collection('promos').findOne({ code: code.toUpperCase() });
+  if (!promo) return res.status(404).json({ error: 'Invalid promo code' });
+  if (!promo.active) return res.status(400).json({ error: 'Promo code is inactive' });
+  if (promo.expiresAt && new Date() > new Date(promo.expiresAt)) return res.status(400).json({ error: 'Promo code has expired' });
+  if (promo.usedCount >= promo.maxUses) return res.status(400).json({ error: 'Promo code usage limit reached' });
+  if (orderTotal < promo.minOrder) return res.status(400).json({ error: `Minimum order of Rs.${promo.minOrder} required` });
+  const discount = promo.type === 'percent' ? Math.round(orderTotal * promo.value / 100) : promo.value;
+  res.json({ success: true, discount, promo: { code: promo.code, type: promo.type, value: promo.value } });
+});
 
 // ── STATS ──────────────────────────────────────────────────
 app.get('/stats', async (req, res) => {
@@ -653,6 +737,16 @@ app.get('/stats', async (req, res) => {
 
 // ── PING ───────────────────────────────────────────────────
 app.get('/ping', (req, res) => res.json({ status: 'alive', time: new Date().toISOString() }));
+
+// Test email route - helps diagnose email issues
+app.get('/test-email/:to', async (req, res) => {
+  try {
+    await sendBrevoEmail(req.params.to, 'In Minutes - Email Test', '<h2>Email is working! ✅</h2><p>Your In Minutes email service is configured correctly.</p>');
+    res.json({ success: true, api_key: process.env.BREVO_API_KEY ? 'SET' : 'NOT SET' });
+  } catch(e) {
+    res.status(500).json({ success: false, error: e.message, api_key: process.env.BREVO_API_KEY ? 'SET' : 'NOT SET' });
+  }
+});
 
 // ── KEEP ALIVE ─────────────────────────────────────────────
 const SELF_URL = process.env.RENDER_EXTERNAL_URL || `http://localhost:${process.env.PORT || 4000}`;
