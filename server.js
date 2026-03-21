@@ -492,7 +492,7 @@ app.post('/orders', async (req, res) => {
     userPhone: user?.phone || '',
     userEmail: user?.email || '',
     items, subtotal,
-    deliveryFee: 25,
+    deliveryFee: req.body.deliveryFee || 25,
     total: subtotal + 25,
     paymentMethod, address,
     location: location || null,
@@ -674,6 +674,43 @@ async function checkInventoryAlerts() {
 }
 // Check inventory every 6 hours
 setInterval(checkInventoryAlerts, 6 * 60 * 60 * 1000);
+
+// ── DELIVERY ZONES ────────────────────────────────────────
+app.get('/zones', async (req, res) => {
+  const zones = await db.collection('zones').find().toArray();
+  res.json(zones.map(({ _id, ...z }) => z));
+});
+
+app.post('/zones', async (req, res) => {
+  const { pincode, area, deliveryFee, active } = req.body;
+  const existing = await db.collection('zones').findOne({ pincode });
+  if (existing) return res.status(400).json({ error: 'Pincode already exists' });
+  const zone = { id: Date.now(), pincode: pincode.toString().trim(), area: area.trim(), deliveryFee: Number(deliveryFee) || 25, active: active !== false, createdAt: new Date().toISOString() };
+  await db.collection('zones').insertOne(zone);
+  res.json(zone);
+});
+
+app.delete('/zones/:id', async (req, res) => {
+  await db.collection('zones').deleteOne({ id: Number(req.params.id) });
+  res.json({ success: true });
+});
+
+app.put('/zones/:id', async (req, res) => {
+  const { area, deliveryFee, active } = req.body;
+  await db.collection('zones').updateOne({ id: Number(req.params.id) }, { $set: { area, deliveryFee: Number(deliveryFee), active } });
+  res.json({ success: true });
+});
+
+app.post('/zones/check', async (req, res) => {
+  const { pincode } = req.body;
+  if (!pincode) return res.status(400).json({ error: 'Pincode required' });
+  const zones = await db.collection('zones').find().toArray();
+  // If no zones configured, allow all
+  if (zones.length === 0) return res.json({ available: true, deliveryFee: 25, area: 'All Areas' });
+  const zone = zones.find(z => z.pincode === pincode.toString().trim() && z.active);
+  if (!zone) return res.json({ available: false, message: 'Sorry, we do not deliver to this pincode yet.' });
+  res.json({ available: true, deliveryFee: zone.deliveryFee, area: zone.area, zone });
+});
 
 // ── PROMO CODES ───────────────────────────────────────────
 app.get('/promos', async (req, res) => {
