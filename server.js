@@ -311,6 +311,20 @@ app.post('/otp/verify', (req, res) => {
   res.json({ success: true });
 });
 
+app.put('/users/:id/profile', async (req, res) => {
+  const { name, email } = req.body;
+  const user = await db.collection('users').findOne({ id: req.params.id });
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  if (email !== user.email) {
+    const exists = await db.collection('users').findOne({ email, id: { $ne: req.params.id } });
+    if (exists) return res.status(400).json({ error: 'Email already in use' });
+  }
+  await db.collection('users').updateOne({ id: req.params.id }, { $set: { name, email } });
+  const updated = await db.collection('users').findOne({ id: req.params.id });
+  const { password: _, _id, ...safe } = updated;
+  res.json(safe);
+});
+
 app.post('/users/reset-password', async (req, res) => {
   const { email, phone, newPassword } = req.body;
   const query = phone ? { phone: phone.replace(/[^0-9]/g, '').slice(-10) } : { email };
