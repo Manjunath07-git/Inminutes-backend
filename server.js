@@ -125,6 +125,14 @@ async function sendOrderNotificationToAdmins(order) {
             <div style="font-size:13px;color:#333;margin-bottom:4px"><strong>Email:</strong> ${order.userEmail}</div>
             <div style="font-size:13px;color:#333"><strong>Address:</strong> ${order.address?.line1 || ''}, ${order.address?.city || ''} - ${order.address?.pincode || ''}</div>
           </div>
+          
+          <div style="margin-top:24px;text-align:center">
+            <a href="${process.env.ADMIN_PANEL_URL || 'https://inminutes-admin.vercel.app'}" style="display:inline-block;background:#166534;color:#fff;text-decoration:none;padding:12px 28px;border-radius:8px;font-size:14px;font-weight:700;letter-spacing:0.5px;">
+              Open Admin Panel ➔
+            </a>
+            <div style="font-size:12px;color:#aaa;margin-top:14px">Login to view full details and update the delivery status.</div>
+          </div>
+
         </div>
       </div>
     `;
@@ -500,6 +508,52 @@ app.delete('/orders/bulk/:type', authenticateToken, async (req, res) => {
 app.put('/orders/:id/seen', authenticateToken, async (req, res) => {
   const id = decodeURIComponent(req.params.id);
   await db.collection('orders').updateOne({ id }, { $set: { isNew: false } });
+  res.json({ success: true });
+});
+
+app.put('/orders/:id/claim', authenticateToken, async (req, res) => {
+  const id = decodeURIComponent(req.params.id);
+  const { adminId, adminName } = req.body;
+  const order = await db.collection('orders').findOne({ id });
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+  if (order.claimedBy) return res.status(400).json({ error: 'Order already claimed by ' + order.claimedByName });
+  await db.collection('orders').updateOne({ id }, { 
+    $set: { claimedBy: adminId, claimedByName: adminName, claimedAt: new Date().toISOString(), isNew: false } 
+  });
+  res.json({ success: true });
+});
+
+app.put('/orders/:id/unclaim', authenticateToken, async (req, res) => {
+  const id = decodeURIComponent(req.params.id);
+  await db.collection('orders').updateOne({ id }, { 
+    $unset: { claimedBy: '', claimedByName: '', claimedAt: '' } 
+  });
+  res.json({ success: true });
+});
+
+app.get('/orders/:id/tracking', authenticateToken, async (req, res) => {
+  const id = decodeURIComponent(req.params.id);
+  const order = await db.collection('orders').findOne({ id });
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+  if (!order.claimedBy) return res.json({ tracking: null });
+  const admin = await db.collection('admins').findOne({ id: order.claimedBy });
+  res.json({
+    tracking: {
+      adminId: order.claimedBy,
+      adminName: order.claimedByName,
+      location: admin?.location || null,
+      updatedAt: admin?.locationUpdatedAt || null,
+      status: order.status
+    }
+  });
+});
+
+app.put('/admins/:id/location', authenticateToken, async (req, res) => {
+  const { lat, lng } = req.body;
+  await db.collection('admins').updateOne(
+    { id: req.params.id },
+    { $set: { location: { lat, lng }, locationUpdatedAt: new Date().toISOString() } }
+  );
   res.json({ success: true });
 });
 
