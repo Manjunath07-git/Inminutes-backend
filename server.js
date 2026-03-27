@@ -1,11 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
 const { MongoClient } = require('mongodb');
-const cloudinary = require('cloudinary').v2;
-const { CloudinaryStorage } = require('multer-storage-cloudinary');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 
@@ -36,18 +31,6 @@ app.use((req, res, next) => {
 });
 app.use(cors({ origin: '*', methods: ['GET','POST','PUT','DELETE','OPTIONS'], allowedHeaders: ['Content-Type','Authorization'] }));
 app.use(express.json());
-
-// ── CLOUDINARY ─────────────────────────────────────────────
-cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME || 'dreykfxfp',
-  api_key: process.env.CLOUDINARY_API_KEY || '486984161796895',
-  api_secret: process.env.CLOUDINARY_API_SECRET || 'jO3xmCTC7wxTXFTEhihJyxpwHY4'
-});
-const storage = new CloudinaryStorage({
-  cloudinary,
-  params: { folder: 'inminutes', allowed_formats: ['jpg','jpeg','png','webp'] }
-});
-const upload = multer({ storage });
 
 // 🔒 ── JWT AUTHENTICATION MIDDLEWARE ──────────────────────────
 const authenticateToken = (req, res, next) => {
@@ -271,26 +254,22 @@ app.post('/users/reset-password', async (req, res) => {
   res.json({ success: true });
 });
 
-// ── PRODUCTS ───────────────────────────────────────────────
+// ── PRODUCTS (No Multer Needed Anymore) ──────────────────────
 app.get('/products', async (req, res) => {
   const products = await db.collection('products').find().toArray();
   res.json(products);
 });
 
-app.post('/products', upload.array('images', 5), async (req, res) => {
-  const data = JSON.parse(req.body.data);
-  const images = (req.files || []).map(f => f.path);
-  const p = { id: Date.now(), ...data, price: Number(data.price), qty: Number(data.qty), images };
+app.post('/products', authenticateToken, async (req, res) => {
+  const p = { id: Date.now(), ...req.body, createdAt: new Date().toISOString() };
   await db.collection('products').insertOne(p);
   res.json(p);
 });
 
-app.put('/products/:id', upload.array('images', 5), async (req, res) => {
-  const data = JSON.parse(req.body.data);
-  const newImgs = (req.files || []).map(f => f.path);
+app.put('/products/:id', authenticateToken, async (req, res) => {
   await db.collection('products').updateOne(
     { id: Number(req.params.id) },
-    { $set: { ...data, price: Number(data.price), qty: Number(data.qty), images: [...(data.keepImages || []), ...newImgs] } }
+    { $set: req.body }
   );
   res.json({ success: true });
 });
@@ -391,7 +370,7 @@ app.get('/orders', async (req, res) => {
   res.json(orders.map(({ _id, ...o }) => o));
 });
 
-// 🚀 NEW: PAGINATED ORDERS ROUTE FOR ADMIN PANELS
+// 🚀 PAGINATED ORDERS ROUTE
 app.get('/orders/paginated', authenticateToken, async (req, res) => {
   const page = parseInt(req.query.page) || 1;
   const limit = parseInt(req.query.limit) || 50;
@@ -569,7 +548,7 @@ app.put('/promos/:id/toggle', authenticateToken, async (req, res) => {
   res.json({ success: true });
 });
 
-// 🚀 UPDATED STATS ROUTE (MongoDB Aggregation)
+// 🚀 STATS ROUTE (MongoDB Aggregation)
 app.get('/stats', authenticateToken, async (req, res) => {
   try {
     const products = await db.collection('products').countDocuments();
@@ -577,21 +556,19 @@ app.get('/stats', authenticateToken, async (req, res) => {
     const admins = await db.collection('admins').countDocuments();
     const totalOrders = await db.collection('orders').countDocuments();
 
-    // 1. Total Revenue Aggregation
     const revenueAggregation = await db.collection('orders').aggregate([
       { $match: { status: 'Delivered' } },
       { $group: { _id: null, totalRevenue: { $sum: "$total" } } }
     ]).toArray();
     const revenue = revenueAggregation.length > 0 ? revenueAggregation[0].totalRevenue : 0;
 
-    // 2. 7-Day Chart Aggregation (Saves huge RAM by calculating on DB!)
     const sevenDaysAgo = new Date();
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
     
     const chartAgg = await db.collection('orders').aggregate([
       { $match: { status: 'Delivered', createdAt: { $gte: sevenDaysAgo.toISOString() } } },
       { $group: {
-          _id: { $substr: ["$createdAt", 0, 10] }, // group by YYYY-MM-DD
+          _id: { $substr: ["$createdAt", 0, 10] }, 
           rev: { $sum: "$total" }
         }
       }
