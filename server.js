@@ -415,13 +415,15 @@ app.post('/orders', authenticateToken, async (req, res) => {
   for (const item of items) {
     const p = products.find(p => p.id === item.productId);
     if (!p) return res.status(400).json({ error: 'Product not found' });
-    if (p.qty < item.quantity) return res.status(400).json({ error: `Only ${p.qty} units of "${p.name}" available` });
+    // CHANGED: Now checks 'unit' instead of 'qty'
+    if (p.unit < item.quantity) return res.status(400).json({ error: `Only ${p.unit} units of "${p.name}" available` });
   }
   for (const item of items) {
     const p = products.find(p => p.id === item.productId);
     await db.collection('products').updateOne(
       { id: item.productId },
-      { $set: { qty: p.qty - item.quantity, inStock: (p.qty - item.quantity) > 0 } }
+      // CHANGED: Now deducts from 'unit' instead of 'qty'
+      { $set: { unit: p.unit - item.quantity, inStock: (p.unit - item.quantity) > 0 } }
     );
   }
   const counter = await db.collection('counters').findOneAndUpdate(
@@ -463,15 +465,15 @@ app.put('/orders/:id/status', authenticateToken, async (req, res) => {
   const id = decodeURIComponent(req.params.id);
   const newStatus = req.body.status;
   const order = await db.collection('orders').findOne({ id });
-  if (!order) return res.status(404).json({ error: 'Order not found' });
   if (newStatus === 'Cancelled' && order.status !== 'Cancelled') {
     for (const item of order.items) {
       const product = await db.collection('products').findOne({ id: item.productId });
       if (product) {
-        const newQty = (product.qty || 0) + item.quantity;
+        // CHANGED: Now restores 'unit' instead of 'qty'
+        const newUnit = (product.unit || 0) + item.quantity;
         await db.collection('products').updateOne(
           { id: item.productId },
-          { $set: { qty: newQty, inStock: newQty > 0 } }
+          { $set: { unit: newUnit, inStock: newUnit > 0 } }
         );
       }
     }
