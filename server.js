@@ -309,19 +309,102 @@ app.put('/admins/:id/location', authenticateToken, async (req, res) => {
 });
 
 // ── PRODUCTS ──────────────────────────────────────────
+const CATEGORY_MAP = {
+  'Groceries and Kitchen': [
+    'Fruits and Vegies',
+    'Dairy Bread and Eggs',
+    'Atta Rice and Dal',
+    'Oil Ghee and Masala',
+    'Chicken Meat and Fish',
+    'Bakery and Biscuits',
+    'Dry Fruits and Cereals',
+  ],
+  'Snacks and Drinks': [
+    'Chips and Namkeen',
+    'Sweets and Chocolates',
+    'Drinks and Juices',
+    'Tea Cofee and Milk',
+    'Sauces and Spreads',
+    'Ice Creams',
+    'Instant Food',
+  ],
+  'Beauty and Personal Care': [
+    'Bath and Body',
+    'Hair',
+    'Skin and Face',
+    'Beauty and Cosmetics',
+    'Feminine Hygiene',
+    'Baby Care',
+  ],
+  'Stationary and Games': [
+    'Cleaners and Repellents',
+    'Home & Lifestyle',
+  ],
+};
+
+const LEGACY_CATEGORY_MAP = {
+  Groceries: { category: 'Groceries and Kitchen', subCategory: 'Fruits and Vegies' },
+  Dairy: { category: 'Groceries and Kitchen', subCategory: 'Dairy Bread and Eggs' },
+  Bakery: { category: 'Groceries and Kitchen', subCategory: 'Bakery and Biscuits' },
+  Snacks: { category: 'Snacks and Drinks', subCategory: 'Chips and Namkeen' },
+  Beverages: { category: 'Snacks and Drinks', subCategory: 'Drinks and Juices' },
+  Beauty: { category: 'Beauty and Personal Care', subCategory: 'Beauty and Cosmetics' },
+  Electronics: { category: 'Stationary and Games', subCategory: 'Home & Lifestyle' },
+  Food: { category: 'Snacks and Drinks', subCategory: 'Instant Food' },
+  Other: { category: 'Stationary and Games', subCategory: 'Home & Lifestyle' },
+};
+
+const FALLBACK_CATEGORY = 'Groceries and Kitchen';
+const FALLBACK_SUBCATEGORY = CATEGORY_MAP[FALLBACK_CATEGORY][0];
+
+function normalizeCategoryFields(productLike) {
+  const value = { ...productLike };
+  const categoryFromInput = String(value.category || '').trim();
+  const subCategoryFromInput = String(value.subCategory || value.subcategory || '').trim();
+
+  let category = categoryFromInput;
+  let subCategory = subCategoryFromInput;
+
+  if (LEGACY_CATEGORY_MAP[category]) {
+    category = LEGACY_CATEGORY_MAP[category].category;
+    if (!subCategory) subCategory = LEGACY_CATEGORY_MAP[category].subCategory;
+  }
+
+  if (!CATEGORY_MAP[category]) {
+    category = FALLBACK_CATEGORY;
+  }
+  if (!subCategory || !CATEGORY_MAP[category].includes(subCategory)) {
+    subCategory = CATEGORY_MAP[category][0] || FALLBACK_SUBCATEGORY;
+  }
+
+  value.category = category;
+  value.subCategory = subCategory;
+  delete value.subcategory;
+  return value;
+}
+
 app.get('/products', async (req, res) => {
   const products = await db.collection('products').find().toArray();
-  res.json(products);
+  const safeProducts = products.map(({ _id, ...p }) => normalizeCategoryFields(p));
+  res.json(safeProducts);
 });
 
 app.post('/products', authenticateToken, async (req, res) => {
-  const p = { id: Date.now(), ...req.body, createdAt: new Date().toISOString() };
+  const incoming = normalizeCategoryFields(req.body || {});
+  if (!incoming.category || !incoming.subCategory) {
+    return res.status(400).json({ error: 'category and subCategory are required' });
+  }
+  const p = { id: Date.now(), ...incoming, createdAt: new Date().toISOString() };
   await db.collection('products').insertOne(p);
   res.json(p);
 });
 
 app.put('/products/:id', authenticateToken, async (req, res) => {
-  await db.collection('products').updateOne({ id: Number(req.params.id) }, { $set: req.body });
+  const update = normalizeCategoryFields(req.body || {});
+  if (!update.category || !update.subCategory) {
+    return res.status(400).json({ error: 'category and subCategory are required' });
+  }
+  await db.collection('products').updateOne({ id: Number(req.params.id) }, { $set: update });
   res.json({ success: true });
 });
 
