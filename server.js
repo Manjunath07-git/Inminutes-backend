@@ -17,11 +17,17 @@ const JWT_SECRET = process.env.JWT_SECRET || 'inminutes-super-secret-key-2024';
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+  // Must include every header the browser may send on cross-origin XHR/fetch (preflight).
+  // Missing Cache-Control here caused real browsers to block requests with "Failed to fetch".
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, Cache-Control, Pragma');
   if (req.method === 'OPTIONS') return res.status(200).end();
   next();
 });
-app.use(cors({ origin: '*', methods: ['GET','POST','PUT','DELETE','OPTIONS'], allowedHeaders: ['Content-Type','Authorization'] }));
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Cache-Control', 'Pragma', 'X-Requested-With', 'Accept', 'Origin']
+}));
 app.use(express.json());
 
 const authenticateToken = (req, res, next) => {
@@ -33,6 +39,13 @@ const authenticateToken = (req, res, next) => {
     req.user = decodedUser;
     next();
   });
+};
+
+const requireHeadRole = (req, res, next) => {
+  if (!req.user || req.user.role !== 'head') {
+    return res.status(403).json({ error: 'Head admin access only.' });
+  }
+  next();
 };
 
 async function sendBrevoEmail(to, subject, htmlContent) {
@@ -647,6 +660,66 @@ app.get('/stats', authenticateToken, async (req, res) => {
     ]).toArray();
     res.json({ products, orders: totalOrders, users, admins: admins - 1, revenue, chartData: chartAgg });
   } catch(e) { res.status(500).json({ error: 'Failed to fetch stats' }); }
+});
+
+// Single JSON payload for the head (god-mode) app — one HTTPS round trip after cold start.
+app.get('/head/dashboard', authenticateToken, requireHeadRole, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page, 10) || 1;
+    const limit = Math.min(parseInt(req.query.limit, 10) || 50, 100);
+    const skip = (page - 1) * limit;
+
+    const productsRaw = await db.collection('products').find().toArray();
+    const products = productsRaw.map(({ _id, ...p }) => normalizeCategoryFields(p));
+
+    const usersRaw = await db.collection('users').find().toArray();
+    const users = usersRaw.map(({ password, _id, ...u }) => u);
+
+    const adminsRaw = await db.collection('admins').find().toArray();
+    const admins = adminsRaw.map(({ password, _id, ...a }) => a);
+
+    const totalOrdersCount = await db.collection('orders').countDocuments();
+    const ordersBatch = await db.collection('orders').find().sort({ createdAt: -1 }).skip(skip).limit(limit).toArray();
+    const orders = ordersBatch.map(({ _id, ...o }) => o);
+
+    const productsCount = await db.collection('products').countDocuments();
+    const usersCount = await db.collection('users').countDocuments();
+    const adminsCount = await db.collection('admins').countDocuments();
+    const revenueAgg = await db.collection('orders').aggregate([
+      { $match: { status: 'Delivered' } },
+      { $group: { _id: null, totalRevenue: { $sum: '$total' } } }
+    ]).toArray();
+    const revenue = revenueAgg.length > 0 ? revenueAgg[0].totalRevenue : 0;
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    const chartAgg = await db.collection('orders').aggregate([
+      { $match: { status: 'Delivered', createdAt: { $gte: sevenDaysAgo.toISOString() } } },
+      { $group: { _id: { $substr: ['$createdAt', 0, 10] }, rev: { $sum: '$total' } } }
+    ]).toArray();
+
+    const stats = {
+      products: productsCount,
+      orders: totalOrdersCount,
+      users: usersCount,
+      admins: adminsCount - 1,
+      revenue,
+      chartData: chartAgg
+    };
+
+    res.json({
+      products,
+      users,
+      admins,
+      stats,
+      orders,
+      totalPages: Math.ceil(totalOrdersCount / limit) || 1,
+      currentPage: page,
+      totalOrders: totalOrdersCount
+    });
+  } catch (e) {
+    console.error('head/dashboard', e);
+    res.status(500).json({ error: 'Failed to load head dashboard' });
+  }
 });
 
 // ── TEST EMAIL & PING ──────────────────────────────────────────
