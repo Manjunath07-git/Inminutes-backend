@@ -14,15 +14,6 @@ const io = new Server(server, {
 
 const JWT_SECRET = process.env.JWT_SECRET || 'inminutes-super-secret-key-2024';
 
-app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  // Must include every header the browser may send on cross-origin XHR/fetch (preflight).
-  // Missing Cache-Control here caused real browsers to block requests with "Failed to fetch".
-  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, Cache-Control, Pragma');
-  if (req.method === 'OPTIONS') return res.status(200).end();
-  next();
-});
 app.use(cors({
   origin: '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -397,9 +388,14 @@ function normalizeCategoryFields(productLike) {
 }
 
 app.get('/products', async (req, res) => {
-  const products = await db.collection('products').find().toArray();
-  const safeProducts = products.map(({ _id, ...p }) => normalizeCategoryFields(p));
-  res.json(safeProducts);
+  try {
+    const products = await db.collection('products').find().toArray();
+    const safeProducts = products.map(({ _id, ...p }) => normalizeCategoryFields(p));
+    res.json(safeProducts);
+  } catch (error) {
+    console.error("🔥 CRITICAL ERROR IN /products:", error);
+    res.status(500).json({ error: "Failed to load products", details: error.message });
+  }
 });
 
 app.post('/products', authenticateToken, async (req, res) => {
