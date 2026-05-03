@@ -399,22 +399,32 @@ app.get('/products', async (req, res) => {
 });
 
 app.post('/products', authenticateToken, async (req, res) => {
-  const incoming = normalizeCategoryFields(req.body || {});
-  if (!incoming.category || !incoming.subCategory) {
-    return res.status(400).json({ error: 'category and subCategory are required' });
+  try {
+    const incoming = normalizeCategoryFields(req.body || {});
+    if (!incoming.category || !incoming.subCategory) {
+      return res.status(400).json({ error: 'category and subCategory are required' });
+    }
+    const p = { id: Date.now(), ...incoming, createdAt: new Date().toISOString() };
+    await db.collection('products').insertOne(p);
+    res.json(p);
+  } catch (error) {
+    console.error("Error inserting product:", error);
+    res.status(500).json({ error: 'Database failed to save product' });
   }
-  const p = { id: Date.now(), ...incoming, createdAt: new Date().toISOString() };
-  await db.collection('products').insertOne(p);
-  res.json(p);
 });
 
 app.put('/products/:id', authenticateToken, async (req, res) => {
-  const update = normalizeCategoryFields(req.body || {});
-  if (!update.category || !update.subCategory) {
-    return res.status(400).json({ error: 'category and subCategory are required' });
+  try {
+    const update = normalizeCategoryFields(req.body || {});
+    if (!update.category || !update.subCategory) {
+      return res.status(400).json({ error: 'category and subCategory are required' });
+    }
+    await db.collection('products').updateOne({ id: Number(req.params.id) }, { $set: update });
+    res.json({ success: true });
+  } catch (error) {
+    console.error("Error updating product:", error);
+    res.status(500).json({ error: 'Database failed to update product' });
   }
-  await db.collection('products').updateOne({ id: Number(req.params.id) }, { $set: update });
-  res.json({ success: true });
 });
 
 app.delete('/products/:id', authenticateToken, async (req, res) => {
