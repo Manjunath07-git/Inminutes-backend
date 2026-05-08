@@ -393,8 +393,8 @@ app.get('/products', async (req, res) => {
     const safeProducts = products.map(({ _id, ...p }) => normalizeCategoryFields(p));
     res.json(safeProducts);
   } catch (error) {
-    console.error("🔥 CRITICAL ERROR IN /products:", error);
-    res.status(500).json({ error: "Failed to load products", details: error.message });
+    console.error("🔥 GET /products ERROR:", error.message);
+    res.status(500).json({ error: 'Failed to fetch products', details: error.message });
   }
 });
 
@@ -408,8 +408,8 @@ app.post('/products', authenticateToken, async (req, res) => {
     await db.collection('products').insertOne(p);
     res.json(p);
   } catch (error) {
-    console.error("Error inserting product:", error);
-    res.status(500).json({ error: 'Database failed to save product' });
+    console.error("🔥 POST /products ERROR:", error.message);
+    res.status(500).json({ error: 'Database failed to save product', details: error.message });
   }
 });
 
@@ -422,8 +422,8 @@ app.put('/products/:id', authenticateToken, async (req, res) => {
     await db.collection('products').updateOne({ id: Number(req.params.id) }, { $set: update });
     res.json({ success: true });
   } catch (error) {
-    console.error("Error updating product:", error);
-    res.status(500).json({ error: 'Database failed to update product' });
+    console.error("🔥 PUT /products ERROR:", error.message);
+    res.status(500).json({ error: 'Database failed to update product', details: error.message });
   }
 });
 
@@ -668,7 +668,6 @@ app.get('/stats', authenticateToken, async (req, res) => {
   } catch(e) { res.status(500).json({ error: 'Failed to fetch stats' }); }
 });
 
-// Single JSON payload for the head (god-mode) app — one HTTPS round trip after cold start.
 app.get('/head/dashboard', authenticateToken, requireHeadRole, async (req, res) => {
   try {
     const page = parseInt(req.query.page, 10) || 1;
