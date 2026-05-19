@@ -392,9 +392,30 @@ app.get('/products', async (req, res) => {
 
     const products = await productsCol.find({}).toArray();
 
-    console.log("Products fetched:", products.length);
+    const safeProducts = products.map((p) => ({
+      ...p,
 
-    res.json(products);
+      category:
+        typeof p.category === "string"
+          ? p.category
+          : "Other",
+
+      subCategory:
+        typeof p.subCategory === "string"
+          ? p.subCategory
+          : "",
+
+      images:
+        Array.isArray(p.images)
+          ? p.images
+          : [],
+
+      qty: Number(p.qty || 0),
+
+      inStock: Boolean(p.inStock),
+    }));
+
+    res.json(safeProducts);
 
   } catch (err) {
 
@@ -409,24 +430,28 @@ app.get('/products', async (req, res) => {
 
 app.post('/products', authenticateToken, async (req, res) => {
   try {
+
     const incoming = normalizeCategoryFields(req.body || {});
 
-    incoming.category = (incoming.category || "")
-      .trim()
-      .toLowerCase();
+    incoming.subCategory =
+      typeof incoming.subCategory === "string"
+        ? incoming.subCategory
+        : "";
 
-    incoming.subCategory = (incoming.subCategory || "general")
-      .trim()
-      .toLowerCase();
-    if (!incoming.category || !incoming.subCategory) {
-      return res.status(400).json({ error: 'category and subCategory are required' });
-    }
-    const p = { id: Date.now(), ...incoming, createdAt: new Date().toISOString() };
-    await db.collection('products').insertOne(p);
-    res.json(p);
-  } catch (error) {
-    console.error("🔥 POST /products ERROR:", error.message);
-    res.status(500).json({ error: 'Database failed to save product', details: error.message });
+    await productsCol.insertOne(incoming);
+
+    res.json({
+      success: true
+    });
+
+  } catch (err) {
+
+    console.error("ADD PRODUCT ERROR:", err);
+
+    res.status(500).json({
+      error: err.message
+    });
+
   }
 });
 
