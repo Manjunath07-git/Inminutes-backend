@@ -482,17 +482,23 @@ app.post('/products', authenticateToken, async (req, res) => {
 
   try {
 
-    const incoming = normalizeCategoryFields(req.body || {});
+    const incoming = req.body || {};
 
     const product = {
 
-      id: Date.now(),
+      id: Number(incoming.id || Date.now()),
 
       name: incoming.name || "",
 
-      category: incoming.category || "Other",
+      category:
+        typeof incoming.category === "string"
+          ? incoming.category
+          : "Other",
 
-      subCategory: incoming.subCategory || "",
+      subCategory:
+        typeof incoming.subCategory === "string"
+          ? incoming.subCategory
+          : "",
 
       price: Number(incoming.price || 0),
 
@@ -502,13 +508,16 @@ app.post('/products', authenticateToken, async (req, res) => {
 
       desc: incoming.desc || "",
 
-      images: Array.isArray(incoming.images)
-        ? incoming.images
-        : [],
+      images:
+        Array.isArray(incoming.images)
+          ? incoming.images
+          : [],
 
       unit: incoming.unit || "",
 
-      createdAt: new Date().toISOString()
+      createdAt:
+        incoming.createdAt ||
+        new Date().toISOString()
 
     };
 
@@ -589,7 +598,6 @@ app.delete('/products/:id', authenticateToken, async (req, res) => {
   }
 
 });
-
 app.post('/products/:id/rate', async (req, res) => {
   const { userId, rating, comment } = req.body;
   const productId = Number(req.params.id);
