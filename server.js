@@ -484,22 +484,39 @@ app.post('/products', authenticateToken, async (req, res) => {
 
     const incoming = normalizeCategoryFields(req.body || {});
 
-    incoming.subCategory =
-      typeof incoming.subCategory === "string"
-        ? incoming.subCategory
-        : "";
+    const product = {
 
-    incoming.qty = Number(incoming.qty || 0);
+      id: Date.now(),
 
-    incoming.inStock = incoming.qty > 0;
+      name: incoming.name || "",
 
-    incoming.createdAt =
-      incoming.createdAt || new Date().toISOString();
+      category: incoming.category || "Other",
 
-    await productsCol.insertOne(incoming);
+      subCategory: incoming.subCategory || "",
+
+      price: Number(incoming.price || 0),
+
+      qty: Number(incoming.qty || 0),
+
+      inStock: Number(incoming.qty || 0) > 0,
+
+      desc: incoming.desc || "",
+
+      images: Array.isArray(incoming.images)
+        ? incoming.images
+        : [],
+
+      unit: incoming.unit || "",
+
+      createdAt: new Date().toISOString()
+
+    };
+
+    await productsCol.insertOne(product);
 
     res.json({
-      success: true
+      success: true,
+      product
     });
 
   } catch (err) {
@@ -563,7 +580,7 @@ app.delete('/products/:id', authenticateToken, async (req, res) => {
 
   } catch (err) {
 
-    console.error("DELETE PRODUCT ERROR:", err.message);
+    console.error("DELETE PRODUCT ERROR:", err);
 
     res.status(500).json({
       error: err.message
