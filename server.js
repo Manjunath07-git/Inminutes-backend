@@ -15,6 +15,9 @@ const io = new Server(server, {
 
 const JWT_SECRET = process.env.JWT_SECRET || 'inminutes-super-secret-key-2024';
 
+let db;
+let productsCol;
+
 app.use(cors({
   origin: '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -134,6 +137,10 @@ async function connectDB() {
     await client.connect();
 
     db = client.db('inminutes');
+
+productsCol = db.collection('products');
+
+console.log('✅ MongoDB connected!');
 
     // GLOBAL PRODUCTS COLLECTION
     productsCol = db.collection('products');
@@ -617,7 +624,6 @@ app.get('/orders/:id/tracking', authenticateToken, async (req, res) => {
 
 app.post('/orders', authenticateToken, async (req, res) => {
   const { userId, items, paymentMethod, address, location } = req.body;
-  const productsCol = db.collection("products");
   for (const item of items) {
 
   const p = await productsCol.findOne({
