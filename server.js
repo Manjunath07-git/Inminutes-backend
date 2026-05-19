@@ -389,18 +389,35 @@ function normalizeCategoryFields(productLike) {
 
 app.get('/products', async (req, res) => {
   try {
-    const products = await db.collection('products').find().toArray();
-    const safeProducts = products.map(({ _id, ...p }) => normalizeCategoryFields(p));
-    res.json(safeProducts);
-  } catch (error) {
-    console.error("🔥 GET /products ERROR:", error.message);
-    res.status(500).json({ error: 'Failed to fetch products', details: error.message });
+    let products = await productsCollection.find({}).toArray();
+
+    products = products.map((p) => ({
+      ...p,
+      category: (p.category || "other").trim(),
+      subCategory: (p.subCategory || "general").trim(),
+      images: Array.isArray(p.images) ? p.images : [],
+      qty: Number(p.qty || 0),
+      inStock: Boolean(p.inStock),
+    }));
+
+    res.json(products);
+  } catch (err) {
+    console.error("GET /products error:", err);
+    res.status(500).json({ error: "Failed to fetch products" });
   }
 });
 
 app.post('/products', authenticateToken, async (req, res) => {
   try {
     const incoming = normalizeCategoryFields(req.body || {});
+
+    incoming.category = (incoming.category || "")
+      .trim()
+      .toLowerCase();
+
+    incoming.subCategory = (incoming.subCategory || "general")
+      .trim()
+      .toLowerCase();
     if (!incoming.category || !incoming.subCategory) {
       return res.status(400).json({ error: 'category and subCategory are required' });
     }
