@@ -497,7 +497,7 @@ app.get('/orders/:id/tracking', authenticateToken, async (req, res) => {
 
 app.post('/orders', authenticateToken, async (req, res) => {
   const { userId, items, paymentMethod, address, location } = req.body;
-  const products = await db.collection('products').find().toArray();
+  const productsCol = db.collection("products");
   for (const item of items) {
     const p = products.find(p => p.id === item.productId);
     if (!p) return res.status(400).json({ error: 'Product not found' });
