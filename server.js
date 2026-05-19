@@ -877,7 +877,19 @@ app.get('/head/dashboard', authenticateToken, requireHeadRole, async (req, res) 
     const skip = (page - 1) * limit;
 
     const productsRaw = await db.collection('products').find().toArray();
-    const products = productsRaw.map(({ _id, ...p }) => normalizeCategoryFields(p));
+    const products = productsRaw.map(({ _id, ...p }) => ({
+  ...normalizeCategoryFields(p),
+
+  images: Array.isArray(p.images) ? p.images : [],
+
+  qty: Number(p.qty || 0),
+
+  inStock: Boolean(p.inStock),
+
+  unit: String(p.unit || ""),
+
+  name: String(p.name || ""),
+}));
 
     const usersRaw = await db.collection('users').find().toArray();
     const users = usersRaw.map(({ password, _id, ...u }) => u);
