@@ -124,7 +124,6 @@ async function checkInventoryAlerts() {
 setInterval(checkInventoryAlerts, 6 * 60 * 60 * 1000);
 
 const MONGO_URL = process.env.MONGO_URL || 'mongodb+srv://inminutes:inminutes123@cluster0.iaf2563.mongodb.net/inminutes?appName=Cluster0';
-let db;
 
 async function connectDB() {
 
