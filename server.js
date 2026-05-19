@@ -389,21 +389,21 @@ function normalizeCategoryFields(productLike) {
 
 app.get('/products', async (req, res) => {
   try {
-    let products = await productsCollection.find({}).toArray();
 
-    products = products.map((p) => ({
-      ...p,
-      category: (p.category || "other").trim(),
-      subCategory: (p.subCategory || "general").trim(),
-      images: Array.isArray(p.images) ? p.images : [],
-      qty: Number(p.qty || 0),
-      inStock: Boolean(p.inStock),
-    }));
+    const products = await productsCol.find({}).toArray();
+
+    console.log("Products fetched:", products.length);
 
     res.json(products);
+
   } catch (err) {
+
     console.error("GET /products error:", err);
-    res.status(500).json({ error: "Failed to fetch products" });
+
+    res.status(500).json({
+      error: err.message
+    });
+
   }
 });
 
