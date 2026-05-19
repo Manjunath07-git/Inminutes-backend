@@ -5,7 +5,8 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const http = require('http');
 const { Server } = require('socket.io');
-
+let db;
+let productsCol;
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
@@ -125,25 +126,66 @@ const MONGO_URL = process.env.MONGO_URL || 'mongodb+srv://inminutes:inminutes123
 let db;
 
 async function connectDB() {
+
   try {
+
     const client = new MongoClient(MONGO_URL);
+
     await client.connect();
+
     db = client.db('inminutes');
+
+    // GLOBAL PRODUCTS COLLECTION
+    productsCol = db.collection('products');
+
     console.log('✅ MongoDB connected!');
+
     const admins = db.collection('admins');
-    const head = await admins.findOne({ email: 'head@inminutes.in' });
+
+    const head = await admins.findOne({
+      email: 'head@inminutes.in'
+    });
+
     if (!head) {
+
       const hashed = await bcrypt.hash('head123', 10);
-      await admins.insertOne({ id: 'head_001', name: 'Head Admin', email: 'head@inminutes.in', password: hashed, role: 'head', createdAt: new Date().toISOString() });
+
+      await admins.insertOne({
+        id: 'head_001',
+        name: 'Head Admin',
+        email: 'head@inminutes.in',
+        password: hashed,
+        role: 'head',
+        createdAt: new Date().toISOString()
+      });
+
     }
+
     const counters = db.collection('counters');
-    const counter = await counters.findOne({ _id: 'orderCounter' });
-    if (!counter) await counters.insertOne({ _id: 'orderCounter', value: 1001 });
-  } catch(e) {
+
+    const counter = await counters.findOne({
+      _id: 'orderCounter'
+    });
+
+    if (!counter) {
+
+      await counters.insertOne({
+        _id: 'orderCounter',
+        value: 1001
+      });
+
+    }
+
+  } catch (e) {
+
     console.error('❌ MongoDB connection failed:', e.message);
+
     process.exit(1);
+
   }
+
 }
+
 
 // ── OTP ──────────────────────────────────────────
 app.post('/otp/send', async (req, res) => {
@@ -388,11 +430,13 @@ function normalizeCategoryFields(productLike) {
 }
 
 app.get('/products', async (req, res) => {
+
   try {
 
     const products = await productsCol.find({}).toArray();
 
     const safeProducts = products.map((p) => ({
+
       ...p,
 
       category:
@@ -413,6 +457,7 @@ app.get('/products', async (req, res) => {
       qty: Number(p.qty || 0),
 
       inStock: Boolean(p.inStock),
+
     }));
 
     res.json(safeProducts);
@@ -426,9 +471,11 @@ app.get('/products', async (req, res) => {
     });
 
   }
+
 });
 
 app.post('/products', authenticateToken, async (req, res) => {
+
   try {
 
     const incoming = normalizeCategoryFields(req.body || {});
@@ -437,6 +484,13 @@ app.post('/products', authenticateToken, async (req, res) => {
       typeof incoming.subCategory === "string"
         ? incoming.subCategory
         : "";
+
+    incoming.qty = Number(incoming.qty || 0);
+
+    incoming.inStock = incoming.qty > 0;
+
+    incoming.createdAt =
+      incoming.createdAt || new Date().toISOString();
 
     await productsCol.insertOne(incoming);
 
@@ -453,25 +507,66 @@ app.post('/products', authenticateToken, async (req, res) => {
     });
 
   }
+
 });
 
 app.put('/products/:id', authenticateToken, async (req, res) => {
+
   try {
+
     const update = normalizeCategoryFields(req.body || {});
-    if (!update.category || !update.subCategory) {
-      return res.status(400).json({ error: 'category and subCategory are required' });
-    }
-    await db.collection('products').updateOne({ id: Number(req.params.id) }, { $set: update });
-    res.json({ success: true });
+
+    update.qty = Number(update.qty || 0);
+
+    update.inStock = update.qty > 0;
+
+    await productsCol.updateOne(
+      {
+        id: Number(req.params.id)
+      },
+      {
+        $set: update
+      }
+    );
+
+    res.json({
+      success: true
+    });
+
   } catch (error) {
-    console.error("🔥 PUT /products ERROR:", error.message);
-    res.status(500).json({ error: 'Database failed to update product', details: error.message });
+
+    console.error("PUT PRODUCT ERROR:", error.message);
+
+    res.status(500).json({
+      error: error.message
+    });
+
   }
+
 });
 
 app.delete('/products/:id', authenticateToken, async (req, res) => {
-  await db.collection('products').deleteOne({ id: Number(req.params.id) });
-  res.json({ success: true });
+
+  try {
+
+    await productsCol.deleteOne({
+      id: Number(req.params.id)
+    });
+
+    res.json({
+      success: true
+    });
+
+  } catch (err) {
+
+    console.error("DELETE PRODUCT ERROR:", err.message);
+
+    res.status(500).json({
+      error: err.message
+    });
+
+  }
+
 });
 
 app.post('/products/:id/rate', async (req, res) => {
@@ -524,14 +619,51 @@ app.post('/orders', authenticateToken, async (req, res) => {
   const { userId, items, paymentMethod, address, location } = req.body;
   const productsCol = db.collection("products");
   for (const item of items) {
-    const p = products.find(p => p.id === item.productId);
-    if (!p) return res.status(400).json({ error: 'Product not found' });
-    if (p.qty < item.quantity) return res.status(400).json({ error: `Only ${p.qty} units of "${p.name}" available` });
+
+  const p = await productsCol.findOne({
+    id: item.productId
+  });
+
+  if (!p) {
+
+    return res.status(400).json({
+      error: 'Product not found'
+    });
+
   }
-  for (const item of items) {
-    const p = products.find(p => p.id === item.productId);
-    await db.collection('products').updateOne({ id: item.productId }, { $set: { qty: p.qty - item.quantity, inStock: (p.qty - item.quantity) > 0 } });
+
+  if ((p.qty || 0) < item.quantity) {
+
+    return res.status(400).json({
+      error: `Only ${p.qty} units of "${p.name}" available`
+    });
+
   }
+
+}
+
+for (const item of items) {
+
+  const p = await productsCol.findOne({
+    id: item.productId
+  });
+
+  const newQty =
+    (p.qty || 0) - item.quantity;
+
+  await productsCol.updateOne(
+    {
+      id: item.productId
+    },
+    {
+      $set: {
+        qty: newQty,
+        inStock: newQty > 0
+      }
+    }
+  );
+
+}
   const counter = await db.collection('counters').findOneAndUpdate({ _id: 'orderCounter' }, { $inc: { value: 1 } }, { returnDocument: 'before' });
   const orderNum = counter.value;
   const subtotal = items.reduce((s, i) => s + i.price * i.quantity, 0);
