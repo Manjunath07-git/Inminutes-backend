@@ -5,8 +5,6 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const http = require('http');
 const { Server } = require('socket.io');
-let db;
-let productsCol;
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
